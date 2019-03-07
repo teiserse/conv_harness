@@ -301,6 +301,8 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
 {
   //attempt at SSE intrinsics
   int h, w, x, y, c, m;
+  __m128 kernel_val[kernel_order];
+  __m128 image_val[kernel_order];
 
   if (kernel_order == 1) {
     for ( m = 0; m < nkernels; m++ ) {
@@ -316,12 +318,10 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
     }
   } else if (kernel_order == 3) {
 
-  __m128 kernel_val[kernel_order];
-  __m128 image_val[kernel_order];
-
     for ( m = 0; m < nkernels; m++ ) {
       double *temp_doubles = malloc(width * height * sizeof(double));
       for ( c = 0; c < nchannels; c++ ) {
+        //load the entire kernel into the vectors
         kernel_val[0] = _mm_set_ps((float) kernels[m][c][0][0], (float) kernels[m][c][0][1], (float) kernels[m][c][0][2],0.0);
         kernel_val[1] = _mm_set_ps((float) kernels[m][c][1][0], (float) kernels[m][c][1][1], (float) kernels[m][c][1][2],0.0);
         kernel_val[2] = _mm_set_ps((float) kernels[m][c][2][0], (float) kernels[m][c][2][1], (float) kernels[m][c][2][2],0.0);
@@ -330,10 +330,12 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
             double sum = 0.0;
             if (c != 0) {sum = temp_doubles[w*height + h];}
             if (h == 0) {
+              //set up the intial vectors for the first element
               image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
               image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
               image_val[2] = _mm_set_ps((float) image[w+2][h][c], (float) image[w+2][h+1][c], (float) image[w+2][h+2][c],0.0);
             } else {
+              //crawl over the values of the vectors as the image is gone through
               image_val[0] = _mm_shuffle_ps(_mm_set_ss((float) image[w][h+2][c]), image_val[0], 0x91); //10010001
               image_val[1] = _mm_shuffle_ps(_mm_set_ss((float) image[w+1][h+2][c]), image_val[1], 0x91);
               image_val[2] = _mm_shuffle_ps(_mm_set_ss((float) image[w+2][h+2][c]), image_val[2], 0x91);
@@ -357,23 +359,58 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   } else {
 
     for ( m = 0; m < nkernels; m++ ) {
-      for ( w = 0; w < width; w++ ) {
-        for ( h = 0; h < height; h++ ) {
-          double sum = 0.0;
-          for ( c = 0; c < nchannels; c++ ) {
-            for ( x = 0; x < kernel_order; x++) {
-              for ( y = 0; y < kernel_order; y++ ) {
-                sum += (double) image[w+x][h+y][c] * (double) kernels[m][c][x][y];
+      double *temp_doubles = malloc(width * height * sizeof(double));
+      for ( c = 0; c < nchannels; c++ ) {
+        //load as much of the kernel into SSE vectors as possible
+        for (int kern = 0; kern < kernel_order; kern++){
+          kernel_val[kern] = _mm_set_ps((float) kernels[m][c][kern][0], (float) kernels[m][c][kern][1], (float) kernels[m][c][kern][2], (float) kernels[m][c][kern][3]); 
+        }
+        for ( w = 0; w < width; w++ ) {
+          for ( h = 0; h < height; h++ ) {
+            double sum = 0.0;
+            if (c != 0) {sum = temp_doubles[w*height + h];}
+            if (h == 0) {
+              //set up the intial vectors for the first element
+              for (int kern = 0; kern < kernel_order; kern++){
+                image_val[kern] = _mm_set_ps((float) image[w+kern][h][c], (float) image[w+kern][h+1][c], (float) image[w+kern][h+2][c],(float) image[w+kern][h+3][c]);
+              }
+            } else {
+              //crawl over the values of the vectors as the image is gone through
+              for (int kern = 0; kern < kernel_order; kern++){
+                __m128 temp = _mm_set_ss((float) image[w+kern][h+3][c]);
+                image_val[kern] = _mm_move_ss(_mm_castsi128_ps(_mm_slli_si128(_mm_castps_si128(image_val[kern]), 4)), temp);
               }
             }
+            for (int row = 0; row < kernel_order; row++){
+              //calculate the values in the SSE vectors
+              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
+              values = _mm_hadd_ps(values, values);
+              values = _mm_hadd_ps(values, values);
+              sum += (double) _mm_cvtss_f32(values);
+              //add up the values not covered by SSE
+              for (int remain = 4; remain < kernel_order; remain++) {
+                sum += (double) image[w+row][h+remain][c] * (double) kernels[m][c][row][remain];
+              }
+            }
+            temp_doubles[w*height + h] = sum;
           }
-          output[m][w][h] = (float) sum;
+        }
+      }
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          output[m][w][h] = (float) temp_doubles[w*height + h];
         }
       }
     }
 
   }
-
+/*
+              for ( x = 0; x < kernel_order; x++) {
+                for ( y = 0; y < kernel_order; y++ ) {
+                  sum += (double) image[w+x][h+y][c] * (double) kernels[m][c][x][y];
+                }
+              }
+*/
   //pthread1
   /*
   int m;

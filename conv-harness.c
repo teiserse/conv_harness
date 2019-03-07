@@ -16,10 +16,10 @@
 
    Version 1.3 : Fixed which loop variables were being incremented
                  in write_out();
-                 Fixed dimensions of output and control_output 
+                 Fixed dimensions of output and control_output
                  matrices in main function
 
-   Version 1.2 : Changed distribution of test data to (hopefully) 
+   Version 1.2 : Changed distribution of test data to (hopefully)
                  eliminate random walk of floating point error;
                  Also introduced checks to restrict kernel-order to
                  a small set of values
@@ -35,6 +35,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <x86intrin.h>
 
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
@@ -71,7 +72,7 @@ float **** new_empty_4d_matrix_float(int dim0, int dim1, int dim2, int dim3)
   float * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(float));
   int i, j, k;
 
-  
+
   for ( i = 0; i < dim0; i++ ) {
     result[i] = &(mat1[i*dim1]);
     for ( j = 0; j < dim1; j++ ) {
@@ -108,7 +109,7 @@ int16_t **** new_empty_4d_matrix_int16(int dim0, int dim1, int dim2, int dim3)
   int16_t * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(int16_t));
   int i, j, k;
 
-  
+
   for ( i = 0; i < dim0; i++ ) {
     result[i] = &(mat1[i*dim1]);
     for ( j = 0; j < dim1; j++ ) {
@@ -215,7 +216,7 @@ void check_result(float *** result, float *** control,
   const double EPSILON = 0.0625;
 
   //printf("SAD\n");
-  
+
   for ( i = 0; i < dim0; i++ ) {
     for ( j = 0; j < dim1; j++ ) {
       for ( k = 0; k < dim2; k++ ) {
@@ -237,8 +238,8 @@ void check_result(float *** result, float *** control,
 
 /* the slow but correct version of matmul written by David */
 void multichannel_conv(int16_t *** image, int16_t **** kernels,
-		       float *** output, int width, int height,
-		       int nchannels, int nkernels, int kernel_order)
+                        float *** output, int width, int height,
+                        int nchannels, int nkernels, int kernel_order)
 {
   int h, w, x, y, c, m;
 
@@ -252,8 +253,8 @@ void multichannel_conv(int16_t *** image, int16_t **** kernels,
               sum += (double) image[w+x][h+y][c] * (double) kernels[m][c][x][y];
             }
           }
-          output[m][w][h] = (float) sum;
         }
+        output[m][w][h] = (float) sum;
       }
     }
   }
@@ -262,7 +263,7 @@ void multichannel_conv(int16_t *** image, int16_t **** kernels,
 /* the fast version of matmul written by the team */
 
 /* pthread function for independent loops inside */
-
+/*
 struct kernel_data {
   int16_t ***image;
   int16_t ***kernel;
@@ -293,11 +294,83 @@ void *kernel_calc(void *calc_data) {
   }
 
 }
-
+*/
 void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
+  //attempt at SSE intrinsics
+  int h, w, x, y, c, m;
+
+  if (kernel_order == 1) {
+    for ( m = 0; m < nkernels; m++ ) {
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          double sum = 0.0;
+          for ( c = 0; c < nchannels; c++ ) {
+            sum += (float) image[w][h][c] * (float) kernels[m][c][0][0];
+          }
+          output[m][w][h] = (float) sum;
+        }
+      }
+    }
+  } else if (kernel_order == 3) {
+
+  __m128 kernel_val[kernel_order];
+  __m128 image_val[kernel_order];
+
+    for ( m = 0; m < nkernels; m++ ) {
+      for ( c = 0; c < nchannels; c++ ) {
+        kernel_val[0] = _mm_set_ps((float) kernels[m][c][0][0], (float) kernels[m][c][0][1], (float) kernels[m][c][0][2],0.0);
+        kernel_val[1] = _mm_set_ps((float) kernels[m][c][1][0], (float) kernels[m][c][1][1], (float) kernels[m][c][1][2],0.0);
+        kernel_val[2] = _mm_set_ps((float) kernels[m][c][2][0], (float) kernels[m][c][2][1], (float) kernels[m][c][2][2],0.0);
+        for ( w = 0; w < width; w++ ) {
+          for ( h = 0; h < height; h++ ) {
+            double sum = 0.0;
+            if (c != 0) {sum = (double) output[m][w][h];}
+            if (h == 0) {
+              image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
+              image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
+              image_val[2] = _mm_set_ps((float) image[w+2][h][c], (float) image[w+2][h+1][c], (float) image[w+2][h+2][c],0.0);
+            } else {
+              image_val[0] = _mm_shuffle_ps(_mm_set_ss((float) image[w][h+2][c]), image_val[0], 0x91); //10010001
+              image_val[1] = _mm_shuffle_ps(_mm_set_ss((float) image[w+1][h+2][c]), image_val[1], 0x91);
+              image_val[2] = _mm_shuffle_ps(_mm_set_ss((float) image[w+2][h+2][c]), image_val[2], 0x91);
+            }
+            for (int row = 0; row < 3; row++){
+              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
+              values = _mm_hadd_ps(values, values);
+              values = _mm_hadd_ps(values, values);
+              sum += (double) _mm_cvtss_f32(values);
+            }
+            output[m][w][h] = (float) sum;
+          }
+        }
+      }
+    }
+  } else {
+
+    
+    for ( m = 0; m < nkernels; m++ ) {
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          double sum = 0.0;
+          for ( c = 0; c < nchannels; c++ ) {
+            for ( x = 0; x < kernel_order; x++) {
+              for ( y = 0; y < kernel_order; y++ ) {
+                sum += (float) image[w+x][h+y][c] * (float) kernels[m][c][x][y];
+              }
+            }
+          }
+          output[m][w][h] = (float) sum;
+        }
+      }
+    }
+    
+  }
+
+  //pthread1
+  /*
   int m;
   pthread_t kernel_calcs[m];
   for ( m = 0; m < nkernels; m++ ) {
@@ -316,8 +389,9 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   for (m = 0; m < nkernels; m++) {
     pthread_join(kernel_calcs[m], NULL);
   }
- // this call here is just dummy code
-  // insert your own code instead
+  */
+
+  //default:
   //multichannel_conv(image, kernels, output, width,
   //                  height, nchannels, nkernels, kernel_order);
 }
@@ -327,7 +401,7 @@ int main(int argc, char ** argv)
   //float image[W][H][C];
   //float kernels[M][C][K][K];
   //float output[M][W][H];
-  
+
   int16_t *** image, **** kernels;
   float *** control_output, *** output;
   long long mul_time;

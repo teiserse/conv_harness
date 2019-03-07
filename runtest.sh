@@ -1,5 +1,5 @@
 config="1000 1000 5 10 10"
-length=2
+length=250
 
 if [[ $# = 1 ]] ; then
 	RESULT_FILE=$1

@@ -299,8 +299,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
-  //attempt at SSE intrinsics
-  
+  //sse1 
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];

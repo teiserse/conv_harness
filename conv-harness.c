@@ -263,7 +263,7 @@ void multichannel_conv(int16_t *** image, int16_t **** kernels,
 /* the fast version of matmul written by the team */
 
 /* pthread function for independent loops inside */
-/*
+
 struct kernel_data {
   int16_t ***image;
   int16_t ***kernel;
@@ -294,12 +294,13 @@ void *kernel_calc(void *calc_data) {
   }
 
 }
-*/
+
 void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
   //sse1 
+  
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];

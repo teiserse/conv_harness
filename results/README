@@ -1,0 +1,9 @@
+results will be named "SOURCE-DESCRIPTION-CONFIG.txt"
+SOURCE will be some name for the computer the data is coming from,
+can also add time, etc. - it's a free field.
+DESCRIPTIONS:
+baseline - the code as given to us, unaltered.
+pthread1 - basic use of pthread, where the use of each kernel is sent to a new thread.
+CONFIGS:
+long1 - "1000 1000 5 10 10", 250 iterations.
+realistic1 - "1920 1080 3 3 5", 250 iterations.

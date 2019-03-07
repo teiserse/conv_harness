@@ -300,6 +300,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int kernel_order)
 {
   //attempt at SSE intrinsics
+  
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];
@@ -404,13 +405,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
     }
 
   }
-/*
-              for ( x = 0; x < kernel_order; x++) {
-                for ( y = 0; y < kernel_order; y++ ) {
-                  sum += (double) image[w+x][h+y][c] * (double) kernels[m][c][x][y];
-                }
-              }
-*/
+  
   //pthread1
   /*
   int m;

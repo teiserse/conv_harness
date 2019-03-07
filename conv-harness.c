@@ -320,6 +320,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   __m128 image_val[kernel_order];
 
     for ( m = 0; m < nkernels; m++ ) {
+      double *temp_doubles = malloc(width * height * sizeof(double));
       for ( c = 0; c < nchannels; c++ ) {
         kernel_val[0] = _mm_set_ps((float) kernels[m][c][0][0], (float) kernels[m][c][0][1], (float) kernels[m][c][0][2],0.0);
         kernel_val[1] = _mm_set_ps((float) kernels[m][c][1][0], (float) kernels[m][c][1][1], (float) kernels[m][c][1][2],0.0);
@@ -327,7 +328,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
         for ( w = 0; w < width; w++ ) {
           for ( h = 0; h < height; h++ ) {
             double sum = 0.0;
-            if (c != 0) {sum = (double) output[m][w][h];}
+            if (c != 0) {sum = temp_doubles[w*height + h];}
             if (h == 0) {
               image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
               image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
@@ -343,14 +344,18 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
               values = _mm_hadd_ps(values, values);
               sum += (double) _mm_cvtss_f32(values);
             }
-            output[m][w][h] = (float) sum;
+            temp_doubles[w*height + h] = sum;
           }
+        }
+      }
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          output[m][w][h] = (float) temp_doubles[w*height + h];
         }
       }
     }
   } else {
 
-    
     for ( m = 0; m < nkernels; m++ ) {
       for ( w = 0; w < width; w++ ) {
         for ( h = 0; h < height; h++ ) {
@@ -358,7 +363,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
           for ( c = 0; c < nchannels; c++ ) {
             for ( x = 0; x < kernel_order; x++) {
               for ( y = 0; y < kernel_order; y++ ) {
-                sum += (float) image[w+x][h+y][c] * (float) kernels[m][c][x][y];
+                sum += (double) image[w+x][h+y][c] * (double) kernels[m][c][x][y];
               }
             }
           }
@@ -366,7 +371,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
         }
       }
     }
-    
+
   }
 
   //pthread1

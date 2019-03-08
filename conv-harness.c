@@ -274,6 +274,8 @@ struct kernel_data {
   int kernel_order;
 };
 
+/* SIMPLE KERNAL_CALC
+
 void *kernel_calc(void *calc_data) {
 
   int h, w, x, y, c;
@@ -294,13 +296,128 @@ void *kernel_calc(void *calc_data) {
   }
 
 }
+*/
 
+// kernel calc with intrinsics
+void *kernel_calc(void *calc_data) {
+
+  int h, w, x, y, c;
+  struct kernel_data *data = calc_data;
+  
+  int16_t ***kernel = data->kernel;
+  int16_t ***image = data->image;
+  float **output = data->output;
+  int width = data->width;
+  int height = data->height;
+  int nchannels = data->nchannels;
+  int kernel_order = data->kernel_order;
+
+  __m128 kernel_val[kernel_order];
+  __m128 image_val[kernel_order];
+
+  if (kernel_order == 1) {
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          double sum = 0.0;
+          for ( c = 0; c < nchannels; c++ ) {
+            sum += (float) image[w][h][c] * (float) kernel[c][0][0];
+          }
+          output[w][h] = (float) sum;
+        }
+      }
+  } else if (kernel_order == 3) {
+
+      double *temp_doubles = malloc(width * height * sizeof(double));
+      for ( c = 0; c < data->nchannels; c++ ) {
+        //load the entire kernel into the vectors
+        kernel_val[0] = _mm_set_ps((float) kernel[c][0][0], (float) kernel[c][0][1], (float) kernel[c][0][2],0.0);
+        kernel_val[1] = _mm_set_ps((float) kernel[c][1][0], (float) kernel[c][1][1], (float) kernel[c][1][2],0.0);
+        kernel_val[2] = _mm_set_ps((float) kernel[c][2][0], (float) kernel[c][2][1], (float) kernel[c][2][2],0.0);
+        for ( w = 0; w < width; w++ ) {
+          for ( h = 0; h < height; h++ ) {
+            double sum = 0.0;
+            if (c != 0) {sum = temp_doubles[w*height + h];}
+            if (h == 0) {
+              //set up the intial vectors for the first element
+              image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
+              image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
+              image_val[2] = _mm_set_ps((float) image[w+2][h][c], (float) image[w+2][h+1][c], (float) image[w+2][h+2][c],0.0);
+            } else {
+              //crawl over the values of the vectors as the image is gone through
+              image_val[0] = _mm_shuffle_ps(_mm_set_ss((float) image[w][h+2][c]), image_val[0], 0x91); //10010001
+              image_val[1] = _mm_shuffle_ps(_mm_set_ss((float) image[w+1][h+2][c]), image_val[1], 0x91);
+              image_val[2] = _mm_shuffle_ps(_mm_set_ss((float) image[w+2][h+2][c]), image_val[2], 0x91);
+            }
+            for (int row = 0; row < 3; row++){
+              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
+              values = _mm_hadd_ps(values, values);
+              values = _mm_hadd_ps(values, values);
+              sum += (double) _mm_cvtss_f32(values);
+            }
+            temp_doubles[w*height + h] = sum;
+          }
+        }
+      }
+      for ( w = 0; w < data->width; w++ ) {
+        for ( h = 0; h < data->height; h++ ) {
+          output[w][h] = (float) temp_doubles[w*height + h];
+        }
+      }
+  } else {
+
+      double *temp_doubles = malloc(width * height * sizeof(double));
+      for ( c = 0; c < nchannels; c++ ) {
+        //load as much of the kernel into SSE vectors as possible
+        for (int kern = 0; kern < kernel_order; kern++){
+          kernel_val[kern] = _mm_set_ps((float) kernel[c][kern][0], (float) kernel[c][kern][1], (float) kernel[c][kern][2], (float) kernel[c][kern][3]); 
+        }
+        for ( w = 0; w < width; w++ ) {
+          for ( h = 0; h < height; h++ ) {
+            double sum = 0.0;
+            if (c != 0) {sum = temp_doubles[w*height + h];}
+            if (h == 0) {
+              //set up the intial vectors for the first element
+              for (int kern = 0; kern < kernel_order; kern++){
+                image_val[kern] = _mm_set_ps((float) image[w+kern][h][c], (float) image[w+kern][h+1][c], (float) image[w+kern][h+2][c],(float) image[w+kern][h+3][c]);
+              }
+            } else {
+              //crawl over the values of the vectors as the image is gone through
+              for (int kern = 0; kern < kernel_order; kern++){
+                __m128 temp = _mm_set_ss((float) image[w+kern][h+3][c]);
+                image_val[kern] = _mm_move_ss(_mm_castsi128_ps(_mm_slli_si128(_mm_castps_si128(image_val[kern]), 4)), temp);
+              }
+            }
+            for (int row = 0; row < kernel_order; row++){
+              //calculate the values in the SSE vectors
+              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
+              values = _mm_hadd_ps(values, values);
+              values = _mm_hadd_ps(values, values);
+              sum += (double) _mm_cvtss_f32(values);
+              //add up the values not covered by SSE
+              for (int remain = 4; remain < kernel_order; remain++) {
+                sum += (double) image[w+row][h+remain][c] * (double) kernel[c][row][remain];
+              }
+            }
+            temp_doubles[w*height + h] = sum;
+          }
+        }
+      }
+      for ( w = 0; w < width; w++ ) {
+        for ( h = 0; h < height; h++ ) {
+          output[w][h] = (float) temp_doubles[w*height + h];
+        }
+      }
+
+  }
+  
+
+}
 void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
-  //sse1 
-  
+  // sse1
+  /*
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];
@@ -403,11 +520,10 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
         }
       }
     }
-
   }
+  */
+  // pthread1
   
-  //pthread1
-  /*
   int m;
   pthread_t kernel_calcs[m];
   for ( m = 0; m < nkernels; m++ ) {
@@ -426,7 +542,6 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   for (m = 0; m < nkernels; m++) {
     pthread_join(kernel_calcs[m], NULL);
   }
-  */
 
   //default:
   //multichannel_conv(image, kernels, output, width,

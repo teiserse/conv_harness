@@ -525,7 +525,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   // pthread1
   
   int m;
-  pthread_t kernel_calcs[m];
+  pthread_t kernel_calcs[nkernels];
   for ( m = 0; m < nkernels; m++ ) {
     struct kernel_data *data = malloc(sizeof(struct kernel_data));
     data->image = image;

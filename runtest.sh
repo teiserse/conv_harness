@@ -1,5 +1,5 @@
-config="1920 1080 3 3 5"
-length=250
+config="256 256 5 64 64"
+length=50
 
 if [[ $# = 1 ]] ; then
 	RESULT_FILE=$1

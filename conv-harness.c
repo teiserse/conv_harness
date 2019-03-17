@@ -274,8 +274,8 @@ struct kernel_data {
   int kernel_order;
 };
 
-/* SIMPLE KERNAL_CALC
-
+/* SIMPLE KERNAL_CALC */
+/*
 void *kernel_calc(void *calc_data) {
 
   int h, w, x, y, c;
@@ -299,6 +299,7 @@ void *kernel_calc(void *calc_data) {
 */
 
 // kernel calc with intrinsics
+
 void *kernel_calc(void *calc_data) {
 
   int h, w, x, y, c;
@@ -417,7 +418,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
                int kernel_order)
 {
   // sse1
-  /*
+  /* 
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];
@@ -542,7 +543,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   for (m = 0; m < nkernels; m++) {
     pthread_join(kernel_calcs[m], NULL);
   }
-
+  
   //default:
   //multichannel_conv(image, kernels, output, width,
   //                  height, nchannels, nkernels, kernel_order);

@@ -7,6 +7,7 @@ pthread1 - basic use of pthread, where the use of each kernel is sent to a new t
 sse1 - Ed's basic implementation of SSE
 pthread_sse1 - a combination of pthread1 and sse1
 CONFIGS:
-long1 - "1000 1000 5 10 10", 250 iterations.
-realistic1 - "1920 1080 3 3 5", 250 iterations.
-clearval1 - "256 256 5 64 64", 50 iterations.
+long1 - "1000 1000 5 10 10", 250 iterations. - OBSELETE
+realistic1 - "1920 1080 3 3 5", 250 iterations. - OBSELETE
+clearval1 - "256 256 5 64 64", 50 iterations. - standard test
+kernel-1 - "128 128 1 32 32", 50 iterations. - light test, for comparing kernel order effects

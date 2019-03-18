@@ -10,4 +10,7 @@ CONFIGS:
 long1 - "1000 1000 5 10 10", 250 iterations. - OBSELETE
 realistic1 - "1920 1080 3 3 5", 250 iterations. - OBSELETE
 clearval1 - "256 256 5 64 64", 50 iterations. - standard test
-kernel-1 - "128 128 1 32 32", 50 iterations. - light test, for comparing kernel order effects
+kernel_1 - "256 256 1 32 32", 50 iterations. - test for comparing kernel order effects
+kernel_3 - "256 256 3 32 32", 50 iterations. - test for comparing kernel order effects
+kernel_5 - "256 256 5 32 32", 50 iterations. - test for comparing kernel order effects
+kernel_7 - "256 256 7 32 32", 50 iterations. - test for comparing kernel order effects

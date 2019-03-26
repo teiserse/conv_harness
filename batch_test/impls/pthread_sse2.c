@@ -275,7 +275,22 @@ struct kernel_data {
   int kernel_order;
   int start_kernel;
   int nkernels;
+  int threadchannels;
 };
+
+void *partial_image_order1(void *calc_data)
+{
+  struct kernel_data *data = calc_data;
+  for (int w = 0; w < data->width; w++ ) {
+    for (int h = data->height/2; h < data->height; h++ ) {
+      double sum = 0.0;
+      for (int c = 0; c < data->nchannels; c++ ) {
+        sum += (float) data->image[w][h][c] * (float) data->kernels[data->start_kernel][c][0][0];
+      }
+      data->output[data->start_kernel][w][h] = (float) sum;
+    }
+  }
+}
 
 void *nkernel_calcs(void *calc_data)
 {
@@ -290,23 +305,33 @@ void *nkernel_calcs(void *calc_data)
   int start_kernel = data->start_kernel;
   int nkernels = data->nkernels;
   int max_kernel = start_kernel + nkernels;
-  printf("Starting thread to calc kernal %d to %d\n", start_kernel, start_kernel+nkernels-1);
+  int threadchannels = data->threadchannels;
+  // printf("Starting thread to calc kernal %d to %d\n", start_kernel, start_kernel+nkernels-1);
 
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];
-
+  
   if (kernel_order == 1) {
     for ( m = start_kernel; m < max_kernel; m++ ) {
+      int maxheight = height;
+      pthread_t otherhalf;
+      if (threadchannels == 32) {
+          printf("pthread");
+          maxheight/=2;
+          pthread_create(&otherhalf, NULL, partial_image_order1, calc_data);
+      }
       for ( w = 0; w < width; w++ ) {
-        for ( h = 0; h < height; h++ ) {
+        for ( h = 0; h < maxheight; h++ ) {
           double sum = 0.0;
-          for ( c = 0; c < nchannels; c++ ) {
+          for ( c = 0; c < threadchannels; c++ ) {
             sum += (float) image[w][h][c] * (float) kernels[m][c][0][0];
           }
           output[m][w][h] = (float) sum;
         }
       }
+      if (otherhalf)
+        pthread_join(otherhalf, NULL);
     }
   } else if (kernel_order == 3) {
 
@@ -405,10 +430,19 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   int m;
   int nprocs = get_nprocs();
   int nthreads = nkernels > nprocs ? nprocs : nkernels;
-  printf("Starting %d threads...\n", nthreads);
+  // printf("Starting %d threads...\n", nthreads);
   int kernelsperthread = nkernels / nthreads;
   int extrakernels = nkernels % nthreads;
+  int extracores = nprocs - nthreads;
   int kernels_done = 0;
+  int threadchannels = nprocs - nthreads;  
+  // extra cores means default one kernel per thread
+  // to utilise all cores:
+  // best case: 32 extra cores: we'll run 0.5 kernels per thread
+  // no other cases actually, if kernels is always a power of 2
+
+  //printf("Kernels per thread: %d\n", kernelsperthread);
+  //printf("Extra cores: %d\n", extracores);
 
   pthread_t kernel_calcs[nthreads];
   for ( m = 0; m < nthreads; m++ ) {
@@ -424,8 +458,12 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
     data->kernel_order = kernel_order;
     data->start_kernel = kernels_done;
     data->nkernels = threadkernels;
+    data->threadchannels = threadchannels;
 
+    //if (m != nthreads-1)
     pthread_create(&kernel_calcs[m], NULL, nkernel_calcs, (void *)data);
+    //else
+    //  nkernel_calcs(data);
     kernels_done += threadkernels;
     
   }

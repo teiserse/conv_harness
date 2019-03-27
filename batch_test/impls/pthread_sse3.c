@@ -292,69 +292,6 @@ void *partial_image_order1(void *calc_data)
   }
 }
 
-void *partial_image_order3(void *calc_data)
-{
-  struct kernel_data *data = calc_data;
-  int16_t ****kernels = data->kernels;
-  int16_t ***image = data->image;
-  float ***output = data->output;
-  int width = data->width;
-  int height = data->height;
-  int nchannels = data->nchannels;
-  int kernel_order = data->kernel_order;
-  int m = data->start_kernel;
-  int nkernels = data->nkernels;
-  int max_kernel = start_kernel + nkernels;
-  int threadchannels = data->threadchannels;
-
-  double *temp_doubles = malloc(width * height * sizeof(double));
-  for ( c = threadchannels; c < nchannels; c++ ) {
-    //load the entire kernel into the vectors
-    kernel_val[0] = _mm_set_ps((float) kernels[m][c][0][0], (float) kernels[m][c][0][1], (float) kernels[m][c][0][2],0.0);
-    kernel_val[1] = _mm_set_ps((float) kernels[m][c][1][0], (float) kernels[m][c][1][1], (float) kernels[m][c][1][2],0.0);
-    kernel_val[2] = _mm_set_ps((float) kernels[m][c][2][0], (float) kernels[m][c][2][1], (float) kernels[m][c][2][2],0.0);
-    for ( w = 0; w < width; w++ ) {
-      for ( h = 0; h < height; h++ ) {
-        double sum = 0.0;
-        if (c != 0) {sum = temp_doubles[w*height + h];}
-        if (h == 0) {
-          //set up the intial vectors for the first element
-          image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
-          image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
-          image_val[2] = _mm_set_ps((float) image[w+2][h][c], (float) image[w+2][h+1][c], (float) image[w+2][h+2][c],0.0);
-        } else {
-          //crawl over the values of the vectors as the image is gone through
-          image_val[0] = _mm_shuffle_ps(_mm_set_ss((float) image[w][h+2][c]), image_val[0], 0x91); //10010001
-          image_val[1] = _mm_shuffle_ps(_mm_set_ss((float) image[w+1][h+2][c]), image_val[1], 0x91);
-          image_val[2] = _mm_shuffle_ps(_mm_set_ss((float) image[w+2][h+2][c]), image_val[2], 0x91);
-        }
-        for (int row = 0; row < 3; row++){
-          __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
-          values = _mm_hadd_ps(values, values);
-          values = _mm_hadd_ps(values, values);
-          sum += (double) _mm_cvtss_f32(values);
-        }
-        temp_doubles[w*height + h] = sum;
-      }
-    }
-  }
-  return (void *)temp_doubles;
-}
-
-void *partial_image_order_other(void *calc_data)
-{
-  struct kernel_data *data = calc_data;
-  for (int w = data->width/2; w < data->width; w++ ) {
-    for (int h = 0; h < data->height; h++ ) {
-      double sum = 0.0;
-      for (int c = 0; c < data->nchannels; c++ ) {
-        sum += (float) data->image[w][h][c] * (float) data->kernels[data->start_kernel][c][0][0];
-      }
-      data->output[data->start_kernel][w][h] = (float) sum;
-    }
-  }
-}
-
 void *nkernel_calcs(void *calc_data)
 {
   struct kernel_data *data = calc_data;
@@ -499,10 +436,6 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
   int extracores = nprocs - nthreads;
   int kernels_done = 0;
   int threadchannels = nprocs - nthreads;  
-  // extra cores means default one kernel per thread
-  // to utilise all cores:
-  // best case: 32 extra cores: we'll run 0.5 kernels per thread
-  // no other cases actually, if kernels is always a power of 2
 
   //printf("Kernels per thread: %d\n", kernelsperthread);
   //printf("Extra cores: %d\n", extracores);

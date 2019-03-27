@@ -36,6 +36,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <x86intrin.h>
+#include <sys/sysinfo.h>
 
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
@@ -266,166 +267,60 @@ void multichannel_conv(int16_t *** image, int16_t **** kernels,
 
 struct kernel_data {
   int16_t ***image;
-  int16_t ***kernel;
-  float **output;
+  int16_t ****kernels;
+  float ***output;
   int width;
   int height;
   int nchannels;
   int kernel_order;
+  int start_kernel;
+  int nkernels;
+  int threadchannels;
 };
 
-/* SIMPLE KERNAL_CALC */
-/*
-void *kernel_calc(void *calc_data) {
-
-  int h, w, x, y, c;
+void *partial_image_order1(void *calc_data)
+{
   struct kernel_data *data = calc_data;
-
-  for ( w = 0; w < data->width; w++ ) {
-    for ( h = 0; h < data->height; h++ ) {
+  for (int w = data->width/2; w < data->width; w++ ) {
+    for (int h = 0; h < data->height; h++ ) {
       double sum = 0.0;
-      for ( c = 0; c < data->nchannels; c++ ) {
-        for ( x = 0; x < data->kernel_order; x++) {
-          for ( y = 0; y < data->kernel_order; y++ ) {
-            sum += (double) data->image[w+x][h+y][c] * (double) data->kernel[c][x][y];
-          }
-        }
-        data->output[w][h] = (float) sum;
+      for (int c = 0; c < data->nchannels; c++ ) {
+        sum += (float) data->image[w][h][c] * (float) data->kernels[data->start_kernel][c][0][0];
       }
+      data->output[data->start_kernel][w][h] = (float) sum;
     }
   }
-
 }
-*/
 
-// kernel calc with intrinsics
-
-void *kernel_calc(void *calc_data) {
-
-  int h, w, x, y, c;
+void *nkernel_calcs(void *calc_data)
+{
   struct kernel_data *data = calc_data;
-  
-  int16_t ***kernel = data->kernel;
+  int16_t ****kernels = data->kernels;
   int16_t ***image = data->image;
-  float **output = data->output;
+  float ***output = data->output;
   int width = data->width;
   int height = data->height;
   int nchannels = data->nchannels;
   int kernel_order = data->kernel_order;
+  int start_kernel = data->start_kernel;
+  int nkernels = data->nkernels;
+  int max_kernel = start_kernel + nkernels;
+  int threadchannels = data->threadchannels;
+  // printf("Starting thread to calc kernal %d to %d\n", start_kernel, start_kernel+nkernels-1);
 
-  __m128 kernel_val[kernel_order];
-  __m128 image_val[kernel_order];
-
-  if (kernel_order == 1) {
-      for ( w = 0; w < width; w++ ) {
-        for ( h = 0; h < height; h++ ) {
-          double sum = 0.0;
-          for ( c = 0; c < nchannels; c++ ) {
-            sum += (float) image[w][h][c] * (float) kernel[c][0][0];
-          }
-          output[w][h] = (float) sum;
-        }
-      }
-  } else if (kernel_order == 3) {
-
-      double *temp_doubles = malloc(width * height * sizeof(double));
-      for ( c = 0; c < data->nchannels; c++ ) {
-        //load the entire kernel into the vectors
-        kernel_val[0] = _mm_set_ps((float) kernel[c][0][0], (float) kernel[c][0][1], (float) kernel[c][0][2],0.0);
-        kernel_val[1] = _mm_set_ps((float) kernel[c][1][0], (float) kernel[c][1][1], (float) kernel[c][1][2],0.0);
-        kernel_val[2] = _mm_set_ps((float) kernel[c][2][0], (float) kernel[c][2][1], (float) kernel[c][2][2],0.0);
-        for ( w = 0; w < width; w++ ) {
-          for ( h = 0; h < height; h++ ) {
-            double sum = 0.0;
-            if (c != 0) {sum = temp_doubles[w*height + h];}
-            if (h == 0) {
-              //set up the intial vectors for the first element
-              image_val[0] = _mm_set_ps((float) image[w][h][c], (float) image[w][h+1][c], (float) image[w][h+2][c],0.0);
-              image_val[1] = _mm_set_ps((float) image[w+1][h][c], (float) image[w+1][h+1][c], (float) image[w+1][h+2][c],0.0);
-              image_val[2] = _mm_set_ps((float) image[w+2][h][c], (float) image[w+2][h+1][c], (float) image[w+2][h+2][c],0.0);
-            } else {
-              //crawl over the values of the vectors as the image is gone through
-              image_val[0] = _mm_shuffle_ps(_mm_set_ss((float) image[w][h+2][c]), image_val[0], 0x91); //10010001
-              image_val[1] = _mm_shuffle_ps(_mm_set_ss((float) image[w+1][h+2][c]), image_val[1], 0x91);
-              image_val[2] = _mm_shuffle_ps(_mm_set_ss((float) image[w+2][h+2][c]), image_val[2], 0x91);
-            }
-            for (int row = 0; row < 3; row++){
-              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
-              values = _mm_hadd_ps(values, values);
-              values = _mm_hadd_ps(values, values);
-              sum += (double) _mm_cvtss_f32(values);
-            }
-            temp_doubles[w*height + h] = sum;
-          }
-        }
-      }
-      for ( w = 0; w < data->width; w++ ) {
-        for ( h = 0; h < data->height; h++ ) {
-          output[w][h] = (float) temp_doubles[w*height + h];
-        }
-      }
-  } else {
-
-      double *temp_doubles = malloc(width * height * sizeof(double));
-      for ( c = 0; c < nchannels; c++ ) {
-        //load as much of the kernel into SSE vectors as possible
-        for (int kern = 0; kern < kernel_order; kern++){
-          kernel_val[kern] = _mm_set_ps((float) kernel[c][kern][0], (float) kernel[c][kern][1], (float) kernel[c][kern][2], (float) kernel[c][kern][3]); 
-        }
-        for ( w = 0; w < width; w++ ) {
-          for ( h = 0; h < height; h++ ) {
-            double sum = 0.0;
-            if (c != 0) {sum = temp_doubles[w*height + h];}
-            if (h == 0) {
-              //set up the intial vectors for the first element
-              for (int kern = 0; kern < kernel_order; kern++){
-                image_val[kern] = _mm_set_ps((float) image[w+kern][h][c], (float) image[w+kern][h+1][c], (float) image[w+kern][h+2][c],(float) image[w+kern][h+3][c]);
-              }
-            } else {
-              //crawl over the values of the vectors as the image is gone through
-              for (int kern = 0; kern < kernel_order; kern++){
-                __m128 temp = _mm_set_ss((float) image[w+kern][h+3][c]);
-                image_val[kern] = _mm_move_ss(_mm_castsi128_ps(_mm_slli_si128(_mm_castps_si128(image_val[kern]), 4)), temp);
-              }
-            }
-            for (int row = 0; row < kernel_order; row++){
-              //calculate the values in the SSE vectors
-              __m128 values = _mm_mul_ps(image_val[row],kernel_val[row]);
-              values = _mm_hadd_ps(values, values);
-              values = _mm_hadd_ps(values, values);
-              sum += (double) _mm_cvtss_f32(values);
-              //add up the values not covered by SSE
-              for (int remain = 4; remain < kernel_order; remain++) {
-                sum += (double) image[w+row][h+remain][c] * (double) kernel[c][row][remain];
-              }
-            }
-            temp_doubles[w*height + h] = sum;
-          }
-        }
-      }
-      for ( w = 0; w < width; w++ ) {
-        for ( h = 0; h < height; h++ ) {
-          output[w][h] = (float) temp_doubles[w*height + h];
-        }
-      }
-
-  }
-  
-
-}
-void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
-               int width, int height, int nchannels, int nkernels,
-               int kernel_order)
-{
-  // sse1
-  /* 
   int h, w, x, y, c, m;
   __m128 kernel_val[kernel_order];
   __m128 image_val[kernel_order];
-
+  
   if (kernel_order == 1) {
-    for ( m = 0; m < nkernels; m++ ) {
-      for ( w = 0; w < width; w++ ) {
+    for ( m = start_kernel; m < max_kernel; m++ ) {
+      int maxwidth = width;
+      pthread_t otherhalf;
+      if (threadchannels == 32) {
+          maxwidth/=2;
+          pthread_create(&otherhalf, NULL, partial_image_order1, calc_data);
+      }
+      for ( w = 0; w < maxwidth; w++ ) {
         for ( h = 0; h < height; h++ ) {
           double sum = 0.0;
           for ( c = 0; c < nchannels; c++ ) {
@@ -434,10 +329,12 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
           output[m][w][h] = (float) sum;
         }
       }
+      if (otherhalf)
+        pthread_join(otherhalf, NULL);
     }
   } else if (kernel_order == 3) {
 
-    for ( m = 0; m < nkernels; m++ ) {
+    for ( m = start_kernel; m < max_kernel; m++ ) {
       double *temp_doubles = malloc(width * height * sizeof(double));
       for ( c = 0; c < nchannels; c++ ) {
         //load the entire kernel into the vectors
@@ -469,6 +366,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
           }
         }
       }
+
       for ( w = 0; w < width; w++ ) {
         for ( h = 0; h < height; h++ ) {
           output[m][w][h] = (float) temp_doubles[w*height + h];
@@ -476,8 +374,7 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
       }
     }
   } else {
-
-    for ( m = 0; m < nkernels; m++ ) {
+    for ( m = start_kernel; m < max_kernel; m++ ) {
       double *temp_doubles = malloc(width * height * sizeof(double));
       for ( c = 0; c < nchannels; c++ ) {
         //load as much of the kernel into SSE vectors as possible
@@ -522,25 +419,52 @@ void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
       }
     }
   }
-  */
-  // pthread1
-  
+}
+
+void team_conv(int16_t *** image, int16_t **** kernels, float *** output,
+               int width, int height, int nchannels, int nkernels,
+               int kernel_order)
+{
+  // pthread_sse2
+
   int m;
-  pthread_t kernel_calcs[nkernels];
-  for ( m = 0; m < nkernels; m++ ) {
+  int nprocs = get_nprocs();
+  int nthreads = nkernels > nprocs ? nprocs : nkernels;
+  // printf("Starting %d threads...\n", nthreads);
+  int kernelsperthread = nkernels / nthreads;
+  int extrakernels = nkernels % nthreads;
+  int extracores = nprocs - nthreads;
+  int kernels_done = 0;
+  int threadchannels = nprocs - nthreads;  
+
+  //printf("Kernels per thread: %d\n", kernelsperthread);
+  //printf("Extra cores: %d\n", extracores);
+
+  pthread_t kernel_calcs[nthreads];
+  for ( m = 0; m < nthreads; m++ ) {
+    int threadkernels = extrakernels-- > 0 ? kernelsperthread + 1 : kernelsperthread;
+    
     struct kernel_data *data = malloc(sizeof(struct kernel_data));
     data->image = image;
-    data->kernel = kernels[m];
-    data->output = output[m];
+    data->kernels = kernels;
+    data->output = output;
     data->width = width;
     data->height = height;
     data->nchannels = nchannels;
     data->kernel_order = kernel_order;
+    data->start_kernel = kernels_done;
+    data->nkernels = threadkernels;
+    data->threadchannels = threadchannels;
 
-    pthread_create(&kernel_calcs[m], NULL, kernel_calc, (void *)data);
+    //if (m != nthreads-1)
+    pthread_create(&kernel_calcs[m], NULL, nkernel_calcs, (void *)data);
+    //else
+    //  nkernel_calcs(data);
+    kernels_done += threadkernels;
+    
   }
 
-  for (m = 0; m < nkernels; m++) {
+  for (m = 0; m < nthreads; m++) {
     pthread_join(kernel_calcs[m], NULL);
   }
   
